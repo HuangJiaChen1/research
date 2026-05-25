@@ -1,0 +1,34 @@
+flowchart TD
+    subgraph Baseline["Baseline: Decoupled Design"]
+        gnn["GNN: Static KNN(k=6)"]
+        attn["CGA: Channel Attention + Geo Bias"]
+        gnn -."NO connection".-> attn
+    end
+
+    subgraph PathC["Path C: Coupled Design"]
+        direction TB
+        gnn_new["GNN: Adaptive Graph"]
+        edge_weights["Edge Weights W_gnn"]
+        attn_new["CGA: Channel Attention"]
+        geo_bias["graph_context_position"]
+        modulation["Modulation:<br/>geo_bias' = geo_bias ⊙ f(W_gnn)"]
+        attn_out["Attention Output"]
+        feedback["Feedback:<br/>Similar attention patterns → New edges"]
+        graph_rewire["Graph Rewiring"]
+
+        gnn_new --> edge_weights
+        edge_weights --> modulation
+        geo_bias --> modulation
+        modulation --> attn_new
+        attn_new --> attn_out
+        attn_out --> feedback
+        feedback --> graph_rewire
+        graph_rewire --> gnn_new
+    end
+
+    Baseline --> PathC
+
+    style gnn fill:#ffcccc
+    style gnn_new fill:#ccffcc
+    style modulation fill:#fff3e0
+    style feedback fill:#fff3e0

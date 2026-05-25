@@ -1,0 +1,40 @@
+flowchart TD
+    subgraph Phase1["Phase 1: CounterMatch Analysis"]
+        pretrained["Pretrained MGCA-Net"]
+        outlier["Select Low-Weight Correspondences"]
+        optimize["Optimize Minimal Perturbation δx"]
+        goal["Goal: Flip Weight from Low → High"]
+        collect["Collect Counterfactual Examples"]
+    end
+
+    subgraph Phase2["Phase 2: Discover Rules"]
+        analyze["Analyze: Which Geometry Changed?"]
+        rules["Discovered Rules:
+        • 70% need Δepipolar distance
+        • 20% need Δlocal angle
+        • 10% need Δscale ratio"]
+    end
+
+    subgraph Phase3["Phase 3: Build Graph Constructor"]
+        edge_scorer["Learned Edge Scorer"]
+        epipolar["Epipolar Score w₁"]
+        angle["Angle Score w₂"]
+        scale["Scale Score w₃"]
+        combine["Edge Weight = Σ wᵢ·scoreᵢ"]
+        explain["Explanation Vector [w₁,w₂,w₃]"]
+    end
+
+    pretrained --> outlier --> optimize --> goal --> collect
+    collect --> analyze --> rules
+    rules --> edge_scorer
+    edge_scorer --> epipolar
+    edge_scorer --> angle
+    edge_scorer --> scale
+    epipolar --> combine
+    angle --> combine
+    scale --> combine
+    combine --> explain
+
+    style pretrained fill:#e1f5fe
+    style edge_scorer fill:#e8f5e9
+    style explain fill:#fff3e0

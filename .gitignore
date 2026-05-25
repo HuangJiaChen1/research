@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter
+.ipynb_checkpoints
+
+# Model weights and large data
+weights/
+*.pth
+*.pt
+*.ckpt
+
+# Data directory (too large for git)
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

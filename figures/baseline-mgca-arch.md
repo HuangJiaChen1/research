@@ -1,0 +1,80 @@
+# Baseline MGCA-Net Architecture
+
+Current MGCA-Net pipeline with **static KNN graphs** (highlighted in red) and **channel-wise attention with geometric bias** (highlighted in green).
+
+```mermaid
+flowchart TD
+    subgraph Input["Input: 2000 Correspondences"]
+        xs["xs: (B,1,N,4)<br/>[x1,y1,x2,y2]"]
+    end
+
+    subgraph Stage_Init["Stage Init (subnetwork_init)"]
+        init_conv["Conv1x1: 4→128"]
+        init_cga1["CGA1: Channel Attention + Geo Bias"]
+        init_gnn["GNN: Static KNN (k=6)"]
+        init_cga2["CGA2: Channel Attention + Geo Bias"]
+        init_out["Output logits + e_hat"]
+    end
+
+    subgraph Stage_0["Stage 0 (subnetwork[0])"]
+        s0_conv["Conv1x1: 6→128"]
+        s0_cga1["CGA1: Channel Attention + Geo Bias"]
+        s0_gnn["GNN: Static KNN (k=6)"]
+        s0_cga2["CGA2: Channel Attention + Geo Bias"]
+        s0_out["Output logits + e_hat"]
+    end
+
+    subgraph Stage_1["Stage 1 (subnetwork[1])"]
+        s1_conv["Conv1x1: 6→128"]
+        s1_cga1["CGA1: Channel Attention + Geo Bias"]
+        s1_gnn["GNN: Static KNN (k=6)"]
+        s1_cga2["CGA2: Channel Attention + Geo Bias"]
+        s1_out["Output logits + e_hat"]
+    end
+
+    subgraph Fusion["CSMGC Fusion"]
+        csmgc["Cross-Stage Multi-Graph Consensus"]
+        final_conv["Conv: 128→1"]
+        weighted_8pt["Weighted 8-Point Algorithm"]
+    end
+
+    xs --> init_conv
+    init_conv --> init_cga1
+    init_cga1 --> init_gnn
+    init_gnn --> init_cga2
+    init_cga2 --> init_out
+
+    init_out --> s0_conv
+    s0_conv --> s0_cga1
+    s0_cga1 --> s0_gnn
+    s0_gnn --> s0_cga2
+    s0_cga2 --> s0_out
+
+    s0_out --> s1_conv
+    s1_conv --> s1_cga1
+    s1_cga1 --> s1_gnn
+    s1_gnn --> s1_cga2
+    s1_cga2 --> s1_out
+
+    init_out --> csmgc
+    s0_out --> csmgc
+    s1_out --> csmgc
+    csmgc --> final_conv
+    final_conv --> weighted_8pt
+
+    style init_gnn fill:#ffcccc
+    style s0_gnn fill:#ffcccc
+    style s1_gnn fill:#ffcccc
+    style init_cga1 fill:#ccffcc
+    style s0_cga1 fill:#ccffcc
+    style s1_cga1 fill:#ccffcc
+    style init_cga2 fill:#ccffcc
+    style s0_cga2 fill:#ccffcc
+    style s1_cga2 fill:#ccffcc
+```
+
+**Key Observations:**
+- 🔴 **Red boxes**: Static KNN graphs — same topology in all stages
+- 🟢 **Green boxes**: Attention modules — single-head, channel-wise (128×128)
+- Each stage outputs `logits` (soft weights) and `e_hat` (essential matrix estimate)
+- CSMGC fuses all three stage outputs for final prediction

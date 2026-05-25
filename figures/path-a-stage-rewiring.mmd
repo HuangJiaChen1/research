@@ -1,0 +1,56 @@
+flowchart TD
+    subgraph Input["Input: 2000 Correspondences"]
+        xs["xs: (B,1,N,4)"]
+    end
+
+    subgraph Stage_Init["Stage Init"]
+        init_conv["Conv1x1: 4→128"]
+        init_cga1["CGA1"]
+        init_gnn["GNN: KNN(k=6)<br/><span style='color:red'>STATIC</span>"]
+        init_cga2["CGA2"]
+        init_out["logits_init + e_hat_init"]
+    end
+
+    subgraph Stage_0["Stage 0 — REWIRING #1"]
+        s0_conv["Conv1x1: 6→128"]
+        s0_cga1["CGA1"]
+        s0_rewire["Dynamic Rewiring:<br/>Graph(t) = f(logits_init)<br/><span style='color:green'>DYNAMIC</span>"]
+        s0_gnn["GNN: Adaptive Graph"]
+        s0_cga2["CGA2"]
+        s0_out["logits_0 + e_hat_0"]
+    end
+
+    subgraph Stage_1["Stage 1 — REWIRING #2"]
+        s1_conv["Conv1x1: 6→128"]
+        s1_cga1["CGA1"]
+        s1_rewire["Dynamic Rewiring:<br/>Graph(t) = f(logits_0)<br/><span style='color:green'>DYNAMIC</span>"]
+        s1_gnn["GNN: Adaptive Graph"]
+        s1_cga2["CGA2"]
+        s1_out["logits_1 + e_hat_1"]
+    end
+
+    subgraph Fusion["CSMGC Fusion"]
+        csmgc["Cross-Stage Consensus"]
+        final["Final Prediction"]
+    end
+
+    xs --> init_conv --> init_cga1 --> init_gnn --> init_cga2 --> init_out
+
+    init_out --> s0_conv --> s0_cga1
+    init_out --> s0_rewire
+    s0_rewire --> s0_gnn --> s0_cga2 --> s0_out
+
+    s0_out --> s1_conv --> s1_cga1
+    s0_out --> s1_rewire
+    s1_rewire --> s1_gnn --> s1_cga2 --> s1_out
+
+    init_out --> csmgc
+    s0_out --> csmgc
+    s1_out --> csmgc
+    csmgc --> final
+
+    style init_gnn fill:#ffcccc
+    style s0_rewire fill:#ccffcc
+    style s0_gnn fill:#ccffcc
+    style s1_rewire fill:#ccffcc
+    style s1_gnn fill:#ccffcc
