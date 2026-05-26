@@ -44,7 +44,7 @@ from test import valid
 from utils import tocuda
 from logger import Logger
 
-# Avoid CUDA memory fragmentation (critical for 11GB GPUs)
+# Reduce CUDA memory fragmentation (helpful for 11GB GPUs)
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
 
@@ -73,8 +73,8 @@ def get_args():
                         help="Validation interval (steps)")
     parser.add_argument("--save_intv", type=int, default=1000,
                         help="Checkpoint save interval")
-    parser.add_argument("--batch_size", type=int, default=32,
-                        help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=16,
+                        help="Batch size (default 16 for 11GB GPU)")
     parser.add_argument("--lr_consensus", type=float, default=1e-4,
                         help="LR for consensus module")
     parser.add_argument("--lr_csmgc", type=float, default=1e-5,
@@ -100,8 +100,6 @@ def get_args():
     parser.add_argument("--net_channels", type=int, default=128)
     parser.add_argument("--clusters", type=int, default=500)
     parser.add_argument("--use_fundamental", action="store_true")
-    parser.add_argument("--amp", action="store_true",
-                        help="Enable Automatic Mixed Precision (AMP) to reduce memory usage")
     return parser.parse_args()
 
 
@@ -145,29 +143,21 @@ def freeze_backbone(model):
 # ---------------------------------------------------------------------------
 # Training step
 # ---------------------------------------------------------------------------
-def train_step(step, optimizer, model, match_loss, data, scaler=None):
+def train_step(step, optimizer, model, match_loss, data):
     model.train()
-    amp_enabled = scaler is not None
+    res_logits, res_e_hat = model(data)
 
-    with torch.cuda.amp.autocast(enabled=amp_enabled):
-        res_logits, res_e_hat = model(data)
-
-        loss = 0
-        loss_val = []
-        for i in range(len(res_logits)):
-            loss_i, geo_loss, cla_loss, l2_loss, prec, rec = \
-                match_loss.run(step, data, res_logits[i], res_e_hat[i])
-            loss += loss_i
-            loss_val += [geo_loss, cla_loss, l2_loss, prec, rec]
+    loss = 0
+    loss_val = []
+    for i in range(len(res_logits)):
+        loss_i, geo_loss, cla_loss, l2_loss, prec, rec = \
+            match_loss.run(step, data, res_logits[i], res_e_hat[i])
+        loss += loss_i
+        loss_val += [geo_loss, cla_loss, l2_loss, prec, rec]
 
     optimizer.zero_grad()
-    if amp_enabled:
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-    else:
-        loss.backward()
-        optimizer.step()
+    loss.backward()
+    optimizer.step()
     return loss_val, loss.item()
 
 
@@ -323,11 +313,6 @@ def main():
     match_loss = MatchLoss(config)
     writer = SummaryWriter(log_dir)
 
-    # AMP scaler for mixed precision training
-    scaler = torch.cuda.amp.GradScaler() if args.amp else None
-    if args.amp:
-        print("AMP (Automatic Mixed Precision) enabled")
-
     logger_train = Logger(os.path.join(log_dir, 'log_train.txt'),
                           title='pilot')
     logger_train.set_names(
@@ -349,8 +334,6 @@ def main():
         optimizer.load_state_dict(rckpt['optimizer'])
         start_step = rckpt['epoch']
         best_f1 = rckpt.get('best_f1', -1.0)
-        if args.amp and 'scaler' in rckpt and scaler is not None:
-            scaler.load_state_dict(rckpt['scaler'])
 
     # ---- Training loop ----
     train_loader_iter = iter(train_loader)
@@ -364,7 +347,7 @@ def main():
 
         train_data = tocuda(train_data)
         loss_vals, total_loss = train_step(step, optimizer, model,
-                                           match_loss, train_data, scaler)
+                                           match_loss, train_data)
 
         # Logging: extract final-stage metrics
         n_metrics = 5
@@ -448,17 +431,14 @@ def main():
                     }, f, indent=2)
 
         if b_save:
-            ckpt_dict = {
+            torch.save({
                 'epoch': step + 1,
                 'state_dict': model.state_dict(),
                 'best_f1': best_f1,
                 'optimizer': optimizer.state_dict(),
                 'consensus_mode': args.consensus_mode,
                 'args': vars(args),
-            }
-            if args.amp and scaler is not None:
-                ckpt_dict['scaler'] = scaler.state_dict()
-            torch.save(ckpt_dict, checkpoint_path)
+            }, checkpoint_path)
 
     print(f"\n{'='*60}")
     print(f"Training complete. consensus_mode={args.consensus_mode}")
