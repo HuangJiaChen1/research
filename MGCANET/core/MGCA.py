@@ -810,7 +810,7 @@ class MGCANet(nn.Module):
 
         # Learnable consensus filtering: refine final stage features
         consensus = self.consensus_module(res_weights, res_e_hat, data['xs'])
-        refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(1)
+        refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(-1)
         sub_l_input = self.CSMGC(stage_out[0], stage_out[1], refined_stage2)
         More_weight = self.M2(self.M1(sub_l_input))
         feature_out = self.covn(More_weight)
