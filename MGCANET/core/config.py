@@ -46,6 +46,11 @@ net_arg.add_argument(
 net_arg.add_argument(
     "--ratio_test_th", type=float, default=0.8, help=""
     "ratio test threshold. Default: 0.8")
+net_arg.add_argument(
+    "--consensus_mode", type=str, default="mlp",
+    choices=["fixed_product", "mlp"],
+    help=""
+    "consensus filtering mode: fixed_product (hand-crafted), mlp (neural learned). Default: mlp")
 
 # -----------------------------------------------------------------------------
 # Data

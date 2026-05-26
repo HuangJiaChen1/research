@@ -646,28 +646,64 @@ def compute_epipolar_distance(E, xs):
     return d / norm
 
 
-class LearnableConsensus(nn.Module):
+class FixedProductConsensus(nn.Module):
     """
-    Learnable cross-stage geometric consistency filtering.
+    Hand-crafted product-based consensus (zero-shot MVP baseline).
 
-    Input: stage_logits list[S] of [B, N], stage_e_hats list[S] of [B, 9], xs [B, 1, N, 4]
-    Output: consensus_score [B, N] in [0, 1]
-
-    Key: product fusion in log domain to preserve AND-gate behavior.
+    consensus = sigmoid(logits_final) * exp(-mean_epipolar_distance)
+    No learnable parameters. This is the best zero-shot heuristic from MVP.
     """
     def __init__(self, num_stages=3):
         super().__init__()
         self.num_stages = num_stages
 
-        # Learnable stage weights (not all stages equally important)
-        self.stage_weights = nn.Parameter(torch.ones(num_stages))
+    def forward(self, stage_logits, stage_e_hats, xs):
+        S = len(stage_e_hats)
+        assert S == self.num_stages
 
-        # Learnable geometric sensitivity
-        self.sigma = nn.Parameter(torch.tensor(1.0))
+        # 1. Compute epipolar distances for each stage
+        dists = []
+        for s in range(S):
+            d = compute_epipolar_distance(stage_e_hats[s], xs)  # [B, N]
+            dists.append(d)
+        dists = torch.stack(dists, dim=2)  # [B, N, S]
 
-        # Learnable semantic-geometric balance
-        # alpha -> 1: semantic only; alpha -> 0: geometric only
-        self.alpha = nn.Parameter(torch.tensor(0.5))
+        # 2. Average distance across stages
+        mean_dist = dists.mean(dim=2)  # [B, N]
+        geo_score = torch.exp(-mean_dist)  # sigma = 1.0 (fixed)
+
+        # 3. Semantic confidence
+        sem_conf = torch.sigmoid(stage_logits[-1])  # [B, N]
+
+        # 4. Product fusion (AND-gate)
+        consensus = sem_conf * geo_score  # [B, N]
+
+        return consensus
+
+
+class NeuralConsensus(nn.Module):
+    """
+    Neural consensus filtering with extended geometric features.
+
+    Input: stage_logits list[S] of [B, N], stage_e_hats list[S] of [B, 9], xs [B, 1, N, 4]
+    Output: consensus_score [B, N] in [0, 1]
+
+    Learns a non-linear mapping from multi-dimensional per-point features
+    to consensus weights via a small MLP.
+    """
+    def __init__(self, num_stages=3, hidden_dim=64):
+        super().__init__()
+        self.num_stages = num_stages
+
+        # MLP: 8-dim input -> hidden -> 1 output
+        self.mlp = nn.Sequential(
+            nn.Linear(8, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Sigmoid()
+        )
 
     def forward(self, stage_logits, stage_e_hats, xs):
         """
@@ -678,27 +714,44 @@ class LearnableConsensus(nn.Module):
         S = len(stage_e_hats)
         assert S == self.num_stages
 
+        B, N = stage_logits[-1].shape[0], stage_logits[-1].shape[1]
+
         # 1. Compute epipolar distances for each stage
         dists = []
         for s in range(S):
             d = compute_epipolar_distance(stage_e_hats[s], xs)  # [B, N]
             dists.append(d)
-        dists = torch.stack(dists)  # [S, B, N]
+        dists = torch.stack(dists, dim=2)  # [B, N, S]
 
-        # 2. Weighted geometric consistency
-        w = F.softmax(self.stage_weights, dim=0)  # [S]
-        mean_dist = (dists * w.view(S, 1, 1)).sum(dim=0)  # [B, N]
-        geo_score = torch.exp(-mean_dist / F.softplus(self.sigma))  # [B, N]
-
-        # 3. Semantic confidence (from final stage logits)
+        # 2. Build per-point feature vector [B, N, 8]
         sem_conf = torch.sigmoid(stage_logits[-1])  # [B, N]
+        geo_mean = dists.mean(dim=2)                # [B, N]
+        geo_var = dists.var(dim=2) if S > 1 else torch.zeros_like(geo_mean)  # [B, N]
 
-        # 4. Product fusion in log domain
-        # This preserves AND-gate: both must be high for high consensus
-        alpha = torch.sigmoid(self.alpha)  # scalar
-        log_consensus = alpha * torch.log(sem_conf + 1e-6) + \
-                       (1 - alpha) * torch.log(geo_score + 1e-6)
-        consensus = torch.exp(log_consensus)  # [B, N]
+        # Global statistics for relative positioning
+        global_mean = geo_mean.mean(dim=1, keepdim=True)     # [B, 1]
+        global_std = geo_mean.std(dim=1, keepdim=True) + 1e-6  # [B, 1]
+        rel_pos = (geo_mean - global_mean) / global_std       # [B, N]
+
+        # Stage-specific distances
+        dist_init = dists[:, :, 0]      # [B, N]
+        dist_final = dists[:, :, -1]    # [B, N]
+        trend = dist_final - dist_init  # [B, N]
+
+        # 3. Stack features [B, N, 8]
+        features = torch.stack([
+            sem_conf,           # semantic confidence
+            torch.exp(-geo_mean),  # geometric score (exp decay)
+            geo_mean,           # raw mean distance
+            geo_var,            # cross-stage stability
+            rel_pos,            # relative to global distribution
+            dist_init,          # initial stage distance
+            dist_final,         # final stage distance
+            trend,              # distance evolution trend
+        ], dim=2)  # [B, N, 8]
+
+        # 4. MLP -> consensus [B, N, 1] -> [B, N]
+        consensus = self.mlp(features).squeeze(-1)  # [B, N]
 
         return consensus
 
@@ -715,7 +768,17 @@ class MGCANet(nn.Module):
         self.subnetwork = nn.Sequential(*self.subnetwork)
 
         self.CSMGC = CSMGC(config.net_channels, config.net_channels)
-        self.consensus_module = LearnableConsensus(num_stages=3)
+
+        # Select consensus module based on config
+        consensus_mode = getattr(config, 'consensus_mode', 'mlp')
+        if consensus_mode == 'fixed_product':
+            self.consensus_module = FixedProductConsensus(num_stages=3)
+        elif consensus_mode == 'mlp':
+            self.consensus_module = NeuralConsensus(num_stages=3, hidden_dim=64)
+        else:
+            # fallback: default to mlp
+            self.consensus_module = NeuralConsensus(num_stages=3, hidden_dim=64)
+
         self.M1 = MBSE(config.net_channels,config.net_channels // 2, 1)
         self.M2 = MBSE(config.net_channels,config.net_channels // 2, 1)
 
