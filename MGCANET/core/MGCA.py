@@ -824,7 +824,7 @@ class MGCANet(nn.Module):
 
 def batch_symeig(X):
     # it is much faster to run symeig on CPU
-    X = X.cpu()
+    X = X.cpu().float()  # force float32: linalg.eigh does not support Half
     b, d, _ = X.size()
     bv = X.new(b, d, d)
     for batch_idx in range(X.shape[0]):
