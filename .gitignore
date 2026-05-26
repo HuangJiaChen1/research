@@ -13,6 +13,7 @@ __pycache__/
 
 # Model weights and large data
 weights/
+MGCANET/weights/
 *.pth
 *.pt
 *.ckpt
