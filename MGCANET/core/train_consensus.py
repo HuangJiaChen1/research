@@ -78,8 +78,10 @@ def get_args():
                         help="Weight decay")
     parser.add_argument("--gpu_id", type=str, default="0",
                         help="CUDA device ID(s)")
-    parser.add_argument("--num_workers", type=int, default=8,
-                        help="DataLoader workers")
+    parser.add_argument("--num_workers", type=int, default=4,
+                        help="DataLoader workers (reduce if OOM)")
+    parser.add_argument("--pin_memory", action="store_true",
+                        help="Enable pin_memory (may cause OOM on limited RAM)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
     parser.add_argument("--resume", type=str, default="",
@@ -333,13 +335,13 @@ def main():
     train_dataset = CorrespondencesDataset(args.data_tr, config)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=True, collate_fn=collate_fn)
+        num_workers=args.num_workers, pin_memory=args.pin_memory, collate_fn=collate_fn)
 
     valid_dataset = CorrespondencesDataset(args.data_va, config)
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=max(1, args.num_workers // 2),
-        pin_memory=True, collate_fn=collate_fn)
+        pin_memory=args.pin_memory, collate_fn=collate_fn)
     print(f"Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
 
     match_loss = MatchLoss(config)

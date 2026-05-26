@@ -36,8 +36,13 @@ def parse_args():
     parser.add_argument("--data_va", type=str, required=True)
     parser.add_argument("--max_samples", type=int, default=1000,
                         help="Max samples to analyze (set -1 for all)")
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=16,
+                        help="Batch size (reduce to 8 if OOM on 11GB GPU)")
     parser.add_argument("--gpu_id", type=str, default="0")
+    parser.add_argument("--num_workers", type=int, default=2,
+                        help="DataLoader workers (0=main process only, safer for HDF5)")
+    parser.add_argument("--pin_memory", action="store_true",
+                        help="Enable pin_memory (may cause host OOM)")
     parser.add_argument("--out_csv", type=str, default="e_matrix_quality.csv")
     return parser.parse_args()
 
@@ -178,7 +183,7 @@ def main():
     dataset = CorrespondencesDataset(args.data_va, config)
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=4, pin_memory=True, collate_fn=collate_fn)
+        num_workers=args.num_workers, pin_memory=args.pin_memory, collate_fn=collate_fn)
 
     all_results = []
     total_samples = 0
