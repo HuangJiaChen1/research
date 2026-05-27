@@ -646,6 +646,23 @@ def compute_epipolar_distance(E, xs):
     return d / norm
 
 
+class IdentityConsensus(nn.Module):
+    """
+    Identity/bypass consensus for ablation.
+
+    Returns all-ones consensus weights, effectively disabling consensus filtering
+    while still allowing CSMGC to be retrained. This isolates the effect of
+    CSMGC retraining from consensus filtering itself.
+    """
+    def __init__(self, num_stages=3):
+        super().__init__()
+        self.num_stages = num_stages
+
+    def forward(self, stage_logits, stage_e_hats, xs):
+        """Return ones — no filtering, pass through unchanged."""
+        return torch.ones_like(stage_logits[-1])  # [B, N]
+
+
 class FixedProductConsensus(nn.Module):
     """
     Hand-crafted product-based consensus (zero-shot MVP baseline).
@@ -775,6 +792,8 @@ class MGCANet(nn.Module):
             self.consensus_module = FixedProductConsensus(num_stages=3)
         elif consensus_mode == 'mlp':
             self.consensus_module = NeuralConsensus(num_stages=3, hidden_dim=64)
+        elif consensus_mode == 'identity':
+            self.consensus_module = IdentityConsensus(num_stages=3)
         else:
             # fallback: default to mlp
             self.consensus_module = NeuralConsensus(num_stages=3, hidden_dim=64)
@@ -824,7 +843,7 @@ class MGCANet(nn.Module):
 
 def batch_symeig(X):
     # it is much faster to run symeig on CPU
-    X = X.cpu().float()  # force float32: linalg.eigh does not support Half
+    X = X.cpu()  # it is much faster to run symeig on CPU
     b, d, _ = X.size()
     bv = X.new(b, d, d)
     for batch_idx in range(X.shape[0]):

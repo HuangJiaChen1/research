@@ -7,7 +7,7 @@
 ## 1. Project Context
 
 **Base architecture:** MGCA-Net (Lin et al., IJCAI 2025) — open-source, we are NOT the authors.
-**Our contribution:** A lightweight plug-in module called **LearnableConsensus**.
+**Our contribution:** A neural plug-in module called **NeuralConsensus** (revised from an earlier scalar-parameter design that was abandoned as "hyperparameter tuning, not learning").
 **Problem:** MGCA-Net achieves strong aggregate F1 (~0.80) on YFCC100M, but suffers **precision collapse** at extreme outlier ratios (>95%).
 
 | Bucket | Baseline Precision | Baseline Recall | Baseline F1 |
@@ -19,48 +19,64 @@ The model finds inliers well (high recall) but admits too many false positives (
 
 ---
 
-## 2. Proposed Method: LearnableConsensus
+## 2. Proposed Method: NeuralConsensus
 
 ### 2.1 Core Idea
 
 Multi-stage correspondence networks (like MGCA-Net) predict increasingly accurate essential matrices across stages. The **epipolar distances** from these predictions contain valuable geometric consistency information that is **not exploited** by existing architectures. We propose to:
 
 1. Compute epipolar distances from each stage's predicted E-matrix
-2. Learnably weight them (not all stages are equally reliable)
-3. Fuse with semantic confidence (final-stage logits) via **log-domain product fusion**
+2. Extract an 8-dimensional feature vector per correspondence (semantic confidence, geometric statistics, stage trends)
+3. Learn a **non-linear fusion** via a small MLP — not a handcrafted formula
 4. Use the consensus score to refine features before cross-stage aggregation
+
+**Design evolution**: We initially explored a scalar-parameter version (`alpha`, `sigma`, `stage_weights`) but abandoned it because it was merely tuning hyperparameters within a fixed function family. The current MLP-based version learns the fusion function from data, which is the correct formulation for a "learnable" module.
 
 ### 2.2 Module Design
 
 ```python
-class LearnableConsensus(nn.Module):
-    def __init__(self, num_stages=3):
-        self.stage_weights = nn.Parameter(torch.ones(num_stages))  # stage importance
-        self.sigma = nn.Parameter(torch.tensor(1.0))                # geo sensitivity
-        self.alpha = nn.Parameter(torch.tensor(0.5))                # sem-geo balance
+class NeuralConsensus(nn.Module):
+    def __init__(self, num_stages=3, hidden_dim=64):
+        super().__init__()
+        self.num_stages = num_stages
+
+        # MLP: 8-dim input -> hidden -> 1 output
+        self.mlp = nn.Sequential(
+            nn.Linear(8, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Sigmoid()
+        )
 
     def forward(self, stage_logits, stage_e_hats, xs):
-        # 1. Epipolar distances per stage
+        S = len(stage_e_hats)
+        # 1. Compute epipolar distances per stage
         dists = [compute_epipolar_distance(e, xs) for e in stage_e_hats]
-        dists = torch.stack(dists)  # [S, B, N]
+        dists = torch.stack(dists, dim=2)  # [B, N, S]
 
-        # 2. Weighted geometric consistency
-        w = F.softmax(self.stage_weights, dim=0)
-        mean_dist = (dists * w.view(S, 1, 1)).sum(dim=0)
-        geo_score = torch.exp(-mean_dist / F.softplus(self.sigma))
+        # 2. Build 8-dimensional per-point features
+        sem_conf = torch.sigmoid(stage_logits[-1])           # [B, N]
+        geo_mean = dists.mean(dim=2)                          # [B, N]
+        geo_var = dists.var(dim=2) if S > 1 else torch.zeros_like(geo_mean)
+        global_mean = geo_mean.mean(dim=1, keepdim=True)
+        global_std = geo_mean.std(dim=1, keepdim=True) + 1e-6
+        rel_pos = (geo_mean - global_mean) / global_std       # [B, N]
+        dist_init, dist_final = dists[:, :, 0], dists[:, :, -1]
+        trend = dist_final - dist_init                        # [B, N]
 
-        # 3. Semantic confidence
-        sem_conf = torch.sigmoid(stage_logits[-1])
+        features = torch.stack([
+            sem_conf, torch.exp(-geo_mean), geo_mean, geo_var,
+            rel_pos, dist_init, dist_final, trend
+        ], dim=2)  # [B, N, 8]
 
-        # 4. Log-domain product fusion (AND-gate)
-        alpha = torch.sigmoid(self.alpha)
-        log_consensus = alpha * torch.log(sem_conf + 1e-6) + \
-                       (1 - alpha) * torch.log(geo_score + 1e-6)
-        consensus = torch.exp(log_consensus)
+        # 3. MLP -> consensus weights
+        consensus = self.mlp(features).squeeze(-1)  # [B, N]
         return consensus
 ```
 
-**Total learnable params:** ~5 scalars + CSMGC (which we also fine-tune).
+**Total learnable params:** ~2.7K (MLP) + CSMGC (which we also fine-tune).
 
 ### 2.3 Integration into MGCA-Net
 
@@ -70,9 +86,11 @@ Inserted **before CSMGC** in `MGCANet.forward()`:
 # Before: sub_l_input = self.CSMGC(stage_out[0], stage_out[1], stage_out[2])
 # After:
 consensus = self.consensus_module(res_weights, res_e_hat, data['xs'])
-refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(1)
+refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(-1)
 sub_l_input = self.CSMGC(stage_out[0], stage_out[1], refined_stage2)
 ```
+
+**Note**: `unsqueeze(1).unsqueeze(-1)` produces `[B, 1, N, 1]` which broadcasts correctly with `stage_out[2]` `[B, 128, N, 1]`. The old `unsqueeze(1).unsqueeze(1)` would create `[B, 1, 1, N]` causing a 30GB OOM via incorrect broadcasting.
 
 ### 2.4 Training Strategy
 
@@ -134,10 +152,8 @@ We first validated the approach without any learning — using fixed `alpha=0.5`
 | Variant | How | Expected Result |
 |---------|-----|----------------|
 | Baseline | Pretrained MGCA-Net, no consensus | F1=0.556 @ >95% |
-| Fixed product | alpha=0.5 frozen, uniform weights, sigma fixed | F1≈0.624 (zero-shot upper bound) |
-| Semantic only | alpha=1.0 frozen | F1≈0.556 (back to baseline) |
-| Geo only | alpha=0.0 frozen | F1≈0.572 (like pairwise) |
-| **Learned full** | **All params learnable** | **F1 > 0.624 (target: +8-10pp total)** |
+| Fixed product | Handcrafted: `sem * exp(-geo_mean)` | F1≈0.624 (zero-shot upper bound) |
+| **Neural (MLP)** | **Learned 8-dim feature fusion** | **F1 > 0.635 (target: +8-10pp total)** |
 
 **Success criterion:** Learned version achieves F1 > 0.635 @ >95% bucket (i.e., >+1pp over zero-shot).
 
@@ -162,9 +178,9 @@ We first validated the approach without any learning — using fixed `alpha=0.5`
 
 2. **Generalizability:** Currently only validated on MGCA-Net. If we can't show it works on other architectures, is the contribution too narrow?
 
-3. **Theoretical grounding:** The product fusion was empirically discovered (zero-shot MVP). Is there a stronger theoretical justification for why product works and linear combination fails?
+3. **Design iteration:** This is the second version in one week (scalar parameters → MLP). How do we convincingly frame this as a principled evolution rather than "moving goalposts"?
 
-4. **Parametric cost:** The module has only ~5 scalar parameters. Reviewers might say: "This is just a clever hand-designed feature, not deep learning."
+4. **Parametric cost:** The MLP has ~2.7K parameters — more defensible than ~5 scalars, but some reviewers may still argue it's "just fitting a heuristic." Cross-architecture validation is the strongest counter.
 
 5. **Fair comparison:** We are modifying someone else's architecture. Are we sure the comparison protocol (training data, batch size, evaluation) is identical to MGCA-Net's reported numbers?
 
@@ -186,7 +202,9 @@ Please address the following:
 
 3. **What is the weakest claim?** Which claim would a reviewer most likely attack, and how should we preempt it?
 
-4. **Is the frozen-backbone strategy a weakness or a strength?** On one hand, it shows the module is plug-and-play. On the other, "only training 5 scalars" might look insufficient.
+4. **Is the frozen-backbone strategy a weakness or a strength?** On one hand, it shows the module is plug-and-play. On the other, "only training consensus + CSMGC" might look insufficient if the improvement is small.
+
+5. **How do we frame the design evolution?** We abandoned a scalar-parameter version in favor of an MLP. How do we present this as a principled design choice rather than ad-hoc iteration?
 
 5. **What additional baselines should we compare against?** (e.g., using epipolar loss directly in training? Using RANSAC post-processing?)
 

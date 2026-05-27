@@ -65,8 +65,8 @@ def get_args():
     parser.add_argument("--log_dir", type=str, default="./log_pilot",
                         help="Base log directory")
     parser.add_argument("--consensus_mode", type=str, default="mlp",
-                        choices=["fixed_product", "mlp"],
-                        help="Consensus mode: fixed_product (hand-crafted) or mlp (NeuralConsensus)")
+                        choices=["fixed_product", "mlp", "identity"],
+                        help="Consensus mode: fixed_product (hand-crafted), mlp (NeuralConsensus), identity (ablation bypass)")
     parser.add_argument("--train_iter", type=int, default=30000,
                         help="Training iterations (pilot: 30K)")
     parser.add_argument("--val_intv", type=int, default=5000,
@@ -275,6 +275,8 @@ def main():
     if args.consensus_mode == 'mlp':
         consensus_params = sum(p.numel() for p in model.consensus_module.parameters())
         print(f"  - NeuralConsensus params: {consensus_params:,}")
+    elif args.consensus_mode == 'identity':
+        print(f"  - IdentityConsensus (bypass ablation, no params)")
     else:
         print(f"  - FixedProductConsensus (hand-crafted, no params)")
 

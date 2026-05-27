@@ -300,9 +300,189 @@ optimizer = torch.optim.Adam([
 
 - [x] ✅ MVP validation: Consensus Filtering (+6.8pp @ >95% outlier)
 - [x] ✅ Design corrected: log-domain product fusion (not linear combination)
-- [ ] Write `LearnableConsensus` module + integrate into MGCA-Net (4-6 hours)
-- [ ] Frozen-backbone fine-tune on YFCC100M (2-4 hours GPU)
-- [ ] Ablation: semantic-only, geo-only, fixed-product, learned (4-6 hours GPU)
+- [x] ✅ Write `NeuralConsensus` module + integrate into MGCA-Net (COMPLETED 2026-05-26)
+- [x] ✅ Frozen-backbone fine-tune on YFCC100M (COMPLETED 2026-05-27)
+- [x] ✅ Ablation: fixed-product vs neural (COMPLETED 2026-05-27)
+- [ ] Identity ablation (CSMGC retraining vs CF effect) — NOT STARTED
 - [ ] SUN3D validation (2-3 hours GPU)
 - [ ] Cross-model plug-in (OANet) (4-8 hours GPU, optional)
 - [ ] Paper writing if all experiments succeed
+
+---
+
+## Part 8: Major Redesign — NeuralConsensus (2026-05-26 Session)
+
+### 8.1 Why LearnableConsensus Was Abandoned
+
+User raised a fundamental critique: the original `LearnableConsensus` (~5 scalar parameters: `alpha`, `sigma`, `stage_weights`) was **not true learning** — it was merely tuning hyperparameters within a predefined function family:
+
+```
+f_θ(s,g) = s^α · g^(1−α) · exp(−d/σ)
+```
+
+This is insufficient for a paper-worthy contribution. The user explicitly requested: "Can we design the consensus filter as a genuine neural module, not a handcrafted method?"
+
+### 8.2 New Design: NeuralConsensus
+
+**Architecture**: 3-layer MLP (`8 → 64 → 32 → 1 + Sigmoid`), ~2.7K parameters
+
+**Input features** (8-dim per correspondence):
+| Feature | Description |
+|---------|-------------|
+| `sem_conf` | Semantic confidence (sigmoid of final logits) |
+| `exp(-geo_mean)` | Geometric score (exponential decay) |
+| `geo_mean` | Cross-stage average epipolar distance |
+| `geo_var` | Cross-stage variance (stability measure) |
+| `rel_pos` | Relative position in global distribution (z-score) |
+| `dist_init` | Initial stage epipolar distance |
+| `dist_final` | Final stage epipolar distance |
+| `trend` | Distance evolution trend (final − init) |
+
+**Key advantage**: The MLP learns a **non-linear fusion function** from data, not constrained to any predefined parametric family. This is true learning.
+
+### 8.3 Baseline: FixedProductConsensus
+
+Handcrafted zero-parameter baseline implementing the zero-shot MVP formula:
+```python
+consensus = sigmoid(logits_final) * exp(-mean_epipolar_distance)
+```
+
+**Purpose**: Direct comparison between handcrafted heuristic and learned neural fusion.
+
+### 8.4 Critical Bug Fixes
+
+| Bug | Impact | Fix |
+|-----|--------|-----|
+| Broadcast dimension | OOM (30GB allocation) | `unsqueeze(1).unsqueeze(1)` → `unsqueeze(1).unsqueeze(-1)` |
+| AMP + `linalg.eigh` | `NotImplementedError` for Half + NaN/Inf | **Removed AMP entirely** from pilot script |
+
+### 8.5 Training Infrastructure
+
+- **Script**: `pilot_neural_consensus.py` (replaces `train_consensus.py` for pilots)
+- **Modes**: `fixed_product` vs `mlp`
+- **Default**: 30K iters, batch_size=16, val every 5K
+- **Best model criterion**: >95% bucket F1
+
+### 8.6 Narrative Direction
+
+- **Module name**: NeuralConsensus (working name)
+- **Paper framing**: Plug-in module (EGCG) with cross-model validation
+- **Key argument**: CSMGC operates in 128-dim feature space without geometric coordinates — it cannot learn epipolar consistency. NeuralConsensus injects explicit geometric supervision.
+- **Cross-architecture**: If pilots succeed, validate on OANet/ACNe to show generalizability
+
+### 8.7 Files Changed in This Session
+
+| File | Action | Notes |
+|------|--------|-------|
+| `core/MGCA.py` | Modified | Deleted `LearnableConsensus`, added `FixedProductConsensus` + `NeuralConsensus`, fixed broadcast bug |
+| `core/config.py` | Modified | Added `consensus_mode` argument |
+| `core/pilot_neural_consensus.py` | Created | Frozen-backbone training comparing fixed_product vs mlp |
+| `CONSENSUS_TRAINING_GUIDE.md` | Updated | Reflects new design |
+| `NOVELTY_CHECK_REPORT.md` | Updated | Reflects new design |
+| `RESEARCH_BRIEF_FOR_REVIEW.md` | Updated | Reflects new design |
+
+### 8.8 Open Questions (Pre-Experiment)
+
+1. Will NeuralConsensus (MLP) outperform FixedProductConsensus (handcrafted) at >95% outlier?
+2. How much of the MLP's improvement comes from non-linearity vs. additional features (variance, trend, rel_pos)?
+3. Should we add cross-architecture validation (OANet) before or after MGCA-Net experiments?
+4. How to frame the design evolution (scalar → MLP) in the paper without looking like "moving goalposts"?
+
+---
+
+## Part 9: Pilot Experiment Results (2026-05-27)
+
+### 9.1 Experiment Setup
+
+- **Script**: `core/pilot_neural_consensus.py`
+- **Backbone**: Frozen (subnetwork_init + subnetwork)
+- **Trainable**: consensus_module + CSMGC
+- **Dataset**: YFCC100M SIFT-2000 (train/val)
+- **Training**: 30K steps, batch_size=16, val every 5K
+- **Best model**: Selected by >95% bucket F1
+
+### 9.2 FixedProductConsensus Results (Handcrafted Baseline)
+
+**Best checkpoint**: Step 10000 (saturated, no further improvement)
+
+| Metric | Baseline (No CF) | FixedProduct (Trained) | Δ |
+|--------|-----------------|------------------------|---|
+| **Global F1** | ~0.80 | **0.8549** | +5.5pp |
+| **Global mAP** | — | **0.8263** | — |
+| **>95% Precision** | 0.424 | **0.6072** | **+18.3pp** |
+| **>95% Recall** | 0.838 | 0.7097 | -12.8pp |
+| **>95% F1** | **0.556** | **0.6415** | **+8.5pp** |
+
+**Breakdown by bucket**:
+
+| Bucket | Baseline F1 | FixedProduct F1 | Δ |
+|--------|-------------|-----------------|---|
+| 0-50% | — | 0.9713 | — |
+| 50-75% | — | 0.9501 | — |
+| 75-90% | — | 0.9187 | — |
+| 90-95% | 0.813 | 0.8483 | +3.5pp |
+| **>95%** | **0.556** | **0.6415** | **+8.5pp** |
+
+### 9.3 NeuralConsensus Results (MLP)
+
+**Best checkpoint**: Step 15000
+
+| Metric | FixedProduct | NeuralConsensus (MLP) | Δ |
+|--------|-------------|----------------------|---|
+| **Global F1** | 0.8549 | **0.8570** | +0.2pp |
+| **Global mAP** | 0.8263 | **0.8289** | +0.3pp |
+| **>95% Precision** | 0.6072 | **0.6020** | -0.5pp |
+| **>95% Recall** | 0.7097 | 0.7124 | +0.3pp |
+| **>95% F1** | **0.6415** | **0.6393** | **-0.2pp** |
+
+### 9.4 Key Findings
+
+1. **MLP did NOT outperform handcrafted**: >95% F1 gap is only 0.2pp (within noise). MLP converged to essentially the same performance.
+2. **Handcrafted formula captures the dominant signal**: `sem * exp(-geo_mean)` is near-optimal for this feature space.
+3. **Additional features (variance, trend, rel_pos) provide no independent signal**: They are either redundant with `geo_mean` or swamped by noise at >95% outlier.
+4. **Precision-recall tradeoff is real and intentional**: Baseline had recall=0.838 ("accept everything"), FixedProduct has precision=0.607 ("filter false positives"). F1 improves because precision gain outweighs recall loss.
+5. **Saturation at ~10K steps**: >95% F1 does not improve beyond step 10000. Global F1 continues to rise due to easier buckets.
+
+### 9.5 Why MLP Failed
+
+| Hypothesis | Evidence | Verdict |
+|-----------|----------|---------|
+| Feature redundancy | 6 extra features add no value | ✅ Confirmed |
+| MLP too shallow | Deeper might help, but unlikely | ⚠️ Possible but low ROI |
+| Frozen backbone limits expressivity | MLP can only reweight stage_out[2] | ✅ Major factor |
+| Task ceiling at ~0.64 F1 | E-matrix noisy at >95% outlier | ✅ Likely |
+| Need per-stage integration | Current design only filters final stage | ⚠️ Unexplored |
+
+### 9.6 Critical Gap: Identity Ablation NOT Done
+
+**We cannot yet prove that the +8.5pp improvement comes from CF itself vs. CSMGC retraining.**
+
+Required experiment:
+- **Identity/bypass ablation**: consensus = 1.0 (no filtering), but CSMGC is retrained
+- If identity ≈ baseline (0.556): CF is the main driver ✅
+- If identity ≈ FixedProduct (0.641): CSMGC retraining is the main driver ⚠️
+
+**This ablation is BLOCKING for paper claims.**
+
+### 9.7 Implications for Paper Direction
+
+**Original hypothesis (discredited)**: "Neural learning > handcrafted heuristic"
+
+**Alternative narratives**:
+
+| Narrative | Strength | Risk |
+|-----------|----------|------|
+| A: "Handcrafted insight identifies optimal fusion principle" | Honest, strong zero-shot result | Workload too small for top venue |
+| B: "Explicit geometric consistency as plug-in module" | Generalizable beyond MGCA-Net | Needs cross-architecture validation |
+| C: "CSMGC retraining reveals untapped capacity" | Interesting but credits CSMGC, not CF | Conflicts with CF narrative |
+
+**User's concern**: Does not want a paper that just says "sem+geo fusion improves F1." Wants something bigger and more substantial.
+
+### 9.8 Open Questions (Post-Experiment)
+
+1. **Is the +8.5pp real?** Identity ablation required to disentangle CF vs. CSMGC retraining.
+2. **Can we beat the ~0.64 ceiling?** Current designs hit a wall. Need new ideas (per-stage integration? attention? evidential?)
+3. **Cross-architecture generalization**: Does CF improve OANet/ACNe? If yes, contribution becomes "general principle."
+4. **SUN3D transfer**: Does CF generalize to indoor scenes?
+5. **How to scale up the idea**: User explicitly wants to "做大做好" — not just a simple fusion trick.
+6. **Theoretical grounding**: Why does product fusion work? Independent noise assumption? MAP estimation? Needs formal justification.

@@ -1,12 +1,14 @@
-# LearnableConsensus 训练与评估完整指南
+# NeuralConsensus 训练与评估完整指南
 
 ## 项目简介
 
-本文档描述在 MGCA-Net 上训练 **LearnableConsensus** 模块的完整流程。
+本文档描述在 MGCA-Net 上训练 **NeuralConsensus** 模块的完整流程。
 
-- **核心目标**：通过可学习的几何一致性过滤，提升高外点率（>95%）场景下的匹配精度。
+- **核心目标**：通过一个真正的神经网络模块（而非 handcrafted 方法）学习融合语义置信度与几何一致性，提升高外点率（>95%）场景下的匹配精度。
 - **训练策略**：冻结 backbone（subnetwork_init + subnetwork），仅微调 consensus_module + CSMGC。
 - **评估指标**：全局 mAP / Precision / Recall / F1，以及按外点率分桶的细粒度指标。
+
+**设计演进**：本 session 删除了原有的 `LearnableConsensus`（仅含 ~5 个标量参数，被用户质疑为"超参数微调而非真正学习"），重新设计为 `NeuralConsensus`（MLP-based，~2.7K 参数，从 8 维特征学习非线性映射）。
 
 ---
 
@@ -74,50 +76,79 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_
 - 输入：`E: [B, 9]`，`xs: [B, 1, N, 4]`
 - 输出：`[B, N]` 距离值
 
-### 2.2 LearnableConsensus(nn.Module)
+### 2.2 FixedProductConsensus(nn.Module) — 基线
 
-可学习的跨阶段共识过滤模块，核心参数：
-
-| 参数 | 形状 | 作用 |
-|------|------|------|
-| `stage_weights` | `[3]` | 3 个 stage 的加权 softmax |
-| `sigma` | scalar | 几何敏感度（softplus 保证正） |
-| `alpha` | scalar | 语义-几何平衡（sigmoid 保证 `[0,1]`） |
-
-**核心设计**：log-domain 的 product 融合
+Hand-crafted 零参数基线，实现零-shot MVP 验证有效的 product 融合：
 
 ```python
-log_consensus = alpha * log(sem) + (1-alpha) * log(geo)
-consensus = exp(log_consensus)
+consensus = sigmoid(logits_final) * exp(-mean_epipolar_distance)
 ```
 
-这保留了零-shot MVP 验证有效的 **AND-gate** 行为。
+- **无学习参数**
+- **作用**：作为对比 baseline，验证 handcrafted 方法与 neural 方法的差距
 
-### 2.3 MGCANet 集成
+### 2.3 NeuralConsensus(nn.Module) — 核心贡献
+
+真正的神经网络模块，从 8 维 per-point 特征学习非线性映射：
+
+| 特征维度 | 含义 |
+|----------|------|
+| `sem_conf` | 语义置信度 (sigmoid(logits_final)) |
+| `exp(-geo_mean)` | 几何分数（指数衰减） |
+| `geo_mean` | 跨 stage 平均 epipolar 距离 |
+| `geo_var` | 跨 stage 距离方差（稳定性） |
+| `rel_pos` | 相对全局分布的位置 (z-score) |
+| `dist_init` | 初始 stage 距离 |
+| `dist_final` | 最终 stage 距离 |
+| `trend` | 距离演化趋势 (final - init) |
+
+**MLP 结构**：`8 → 64 → 32 → 1 + Sigmoid`
+
+**总参数量**：~2.7K（远多于原 LearnableConsensus 的 ~5 个标量）
+
+**关键设计决策**：
+1. 从 handcrafted 公式（`sem * exp(-dist)`）转向 learned feature fusion
+2. MLP 学习的是非线性组合，而非预定义函数族中的参数微调
+3. 保留 product-based MVP 的洞察，但通过学习实现更灵活的融合
+
+### 2.4 MGCANet 集成
 
 在 `MGCANet.forward()` 中，CSMGC 之前插入共识过滤：
 
 ```python
 consensus = self.consensus_module(res_weights, res_e_hat, data['xs'])
-refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(1)
+refined_stage2 = stage_out[2] * consensus.unsqueeze(1).unsqueeze(-1)
 sub_l_input = self.CSMGC(stage_out[0], stage_out[1], refined_stage2)
 ```
 
+**注意**：`consensus.unsqueeze(1).unsqueeze(-1)` 产生 `[B, 1, N, 1]`，与 `stage_out[2]` `[B, 128, N, 1]` 广播正确。
+旧写法 `unsqueeze(1).unsqueeze(1)` 会产生 `[B, 1, 1, N]`，导致错误广播为 `[B, 128, N, N]`（30GB OOM）。
+
 ---
 
-## 3. 训练脚本：`train_consensus.py`
+## 3. 训练脚本：`pilot_neural_consensus.py`
 
 ### 3.1 基本用法
 
 ```bash
 cd MGCANET/core
 
-CUDA_VISIBLE_DEVICES=0 python train_consensus.py \
+# Hand-crafted baseline (zero-shot)
+CUDA_VISIBLE_DEVICES=0 python pilot_neural_consensus.py \
     --pretrained ../weights/yfcc100m/model_best1.pth \
     --data_tr ../data_dump/yfcc-sift-2000-train.hdf5 \
     --data_va ../data_dump/yfcc-sift-2000-val.hdf5 \
-    --ablation learned \
-    --log_dir ./log_consensus
+    --log_dir ./log_pilot \
+    --consensus_mode fixed_product
+
+# Neural consensus (MLP-based learning)
+CUDA_VISIBLE_DEVICES=0 python pilot_neural_consensus.py \
+    --pretrained ../weights/yfcc100m/model_best1.pth \
+    --data_tr ../data_dump/yfcc-sift-2000-train.hdf5 \
+    --data_va ../data_dump/yfcc-sift-2000-val.hdf5 \
+    --log_dir ./log_pilot \
+    --consensus_mode mlp \
+    --lr_consensus 1e-4 --lr_csmgc 1e-5
 ```
 
 ### 3.2 关键参数
@@ -125,30 +156,30 @@ CUDA_VISIBLE_DEVICES=0 python train_consensus.py \
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--pretrained` | 必填 | 预训练模型路径 |
-| `--ablation` | `learned` | 消融模式（见下表） |
-| `--train_iter` | `50000` | 训练步数 |
+| `--consensus_mode` | `mlp` | `fixed_product` (handcrafted) 或 `mlp` (neural) |
+| `--train_iter` | `30000` | 训练步数（pilot: 30K） |
 | `--val_intv` | `5000` | 验证间隔 |
-| `--batch_size` | `32` | 批次大小 |
+| `--batch_size` | `16` | 批次大小（11GB GPU 适配） |
 | `--lr_consensus` | `1e-4` | consensus 学习率 |
 | `--lr_csmgc` | `1e-5` | CSMGC 学习率 |
 | `--gpu_id` | `"0"` | GPU 编号 |
 
 ### 3.3 消融模式
 
-| 模式 | Alpha | Stage Weights | Sigma | 说明 |
-|------|-------|---------------|-------|------|
-| `learned` | 可学习 | 可学习 | 可学习 | 完整版本 |
-| `fixed_product` | 0.5（冻结） | 均匀（冻结） | 1.0（冻结） | 零-shot 上限 |
-| `semantic_only` | ~1.0（冻结） | 冻结 | 冻结 | 仅用语义（基线） |
-| `geo_only` | ~0.0（冻结） | 冻结 | 冻结 | 仅用几何一致性 |
+| 模式 | 实现 | 参数量 | 说明 |
+|------|------|--------|------|
+| `fixed_product` | `sem_conf * exp(-geo_mean)` | 0 | Handcrafted 零-shot baseline |
+| `mlp` | `MLP(8-dim features)` | ~2.7K | Neural 学习模块 |
+
+**设计变更**：删除了原有的 `learned` / `semantic_only` / `geo_only` 模式（基于 scalar alpha 的变体），因为这些本质上是 handcrafted 函数的超参数微调，无法体现"真正学习"。
 
 ### 3.4 恢复训练
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python train_consensus.py \
+CUDA_VISIBLE_DEVICES=0 python pilot_neural_consensus.py \
     --pretrained ../weights/yfcc100m/model_best1.pth \
     ... \
-    --resume ./log_consensus/learned/checkpoint.pth
+    --resume ./log_pilot/mlp/checkpoint.pth
 ```
 
 ### 3.5 训练日志输出示例
@@ -234,22 +265,29 @@ LaTeX table row:
 
 ## 5. 完整实验流程
 
-### Phase 1：训练所有消融模式（并行）
+### Phase 1：训练对比实验（并行）
 
 ```bash
 cd MGCANET/core
 
-for mode in fixed_product semantic_only geo_only learned; do
-    CUDA_VISIBLE_DEVICES=0 python train_consensus.py \
-        --pretrained ../weights/yfcc100m/model_best1.pth \
-        --data_tr ../data_dump/yfcc-sift-2000-train.hdf5 \
-        --data_va ../data_dump/yfcc-sift-2000-val.hdf5 \
-        --ablation $mode \
-        --log_dir ./log_consensus \
-        --train_iter 50000 \
-        --val_intv 5000 \
-        --batch_size 32 &
-done
+# Handcrafted baseline
+CUDA_VISIBLE_DEVICES=0 python pilot_neural_consensus.py \
+    --pretrained ../weights/yfcc100m/model_best1.pth \
+    --data_tr ../data_dump/yfcc-sift-2000-train.hdf5 \
+    --data_va ../data_dump/yfcc-sift-2000-val.hdf5 \
+    --log_dir ./log_pilot \
+    --consensus_mode fixed_product \
+    --train_iter 30000 &
+
+# Neural consensus
+CUDA_VISIBLE_DEVICES=0 python pilot_neural_consensus.py \
+    --pretrained ../weights/yfcc100m/model_best1.pth \
+    --data_tr ../data_dump/yfcc-sift-2000-train.hdf5 \
+    --data_va ../data_dump/yfcc-sift-2000-val.hdf5 \
+    --log_dir ./log_pilot \
+    --consensus_mode mlp \
+    --train_iter 30000 &
+
 wait
 ```
 
@@ -286,12 +324,10 @@ CUDA_VISIBLE_DEVICES=0 python test_consensus.py \
 | 方法 | 全局 F1 | >95% F1 | >95% Precision | >95% Recall |
 |------|---------|---------|----------------|-------------|
 | Baseline（无 consensus） | ~0.80 | **0.556** | 0.424 | 0.838 |
-| Fixed Product（零-shot） | ~0.80 | **0.624** | 0.516 | 0.732 |
-| Semantic Only | ~0.80 | ~0.556 | ~0.424 | ~0.838 |
-| Geo Only | ~0.80 | ~0.572 | ~0.500 | ~0.650 |
-| **Learned（目标）** | ~0.82 | **>0.635** | >0.530 | >0.750 |
+| Fixed Product（handcrafted） | ~0.80 | **0.624** | 0.516 | 0.732 |
+| **NeuralConsensus（MLP，目标）** | ~0.82 | **>0.635** | >0.530 | >0.750 |
 
-**Phase 2 成功标准**：`learned` 模式在 >95% bucket 上达到 F1 > 0.635（比 zero-shot 的 0.624 再提升 ≥1pp）。
+**Phase 2 成功标准**：`mlp` 模式在 >95% bucket 上达到 F1 > 0.635（比 handcrafted 的 0.624 再提升 ≥1pp），证明真正的 neural learning 优于 handcrafted heuristic。
 
 ---
 
@@ -302,10 +338,12 @@ CUDA_VISIBLE_DEVICES=0 python test_consensus.py \
 减小 batch size：
 
 ```bash
-python train_consensus.py ... --batch_size 16
+python pilot_neural_consensus.py ... --batch_size 8
 ```
 
-RTX2080Ti（11GB）理论上可以跑 batch_size=32，若显存紧张可降至 16。
+RTX2080Ti（11GB）默认 batch_size=16。若仍 OOM，检查是否有其他进程占用显存。
+
+**注意**：本 session 修复了一个关键广播 bug。旧写法 `consensus.unsqueeze(1).unsqueeze(1)` 会产生 `[B, 128, N, N]` 的 30GB 张量。当前代码已修复为 `unsqueeze(1).unsqueeze(-1)`。
 
 ### Q2：可以加载原始 MGCA-Net 的 checkpoint 继续训练吗？
 
@@ -335,10 +373,18 @@ RTX2080Ti 上约 **2-4 小时**（50K steps，frozen backbone）。
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `core/MGCA.py` | 修改 | 新增 `LearnableConsensus`、`compute_epipolar_distance`，集成到 `MGCANet` |
-| `core/train_consensus.py` | 新增 | Frozen backbone 训练脚本 |
-| `core/test_consensus.py` | 新增 | Test 评估脚本 |
+| `core/MGCA.py` | 修改 | **删除** `LearnableConsensus`，新增 `FixedProductConsensus` + `NeuralConsensus`，新增 `compute_epipolar_distance`，修复广播维度 bug，集成到 `MGCANet` |
+| `core/config.py` | 修改 | 新增 `consensus_mode` 参数（`fixed_product` / `mlp`） |
+| `core/pilot_neural_consensus.py` | 新增 | Frozen backbone pilot 训练脚本（对比 handcrafted vs neural） |
+| `core/train_consensus.py` | 保留 | 旧版训练脚本（基于 LearnableConsensus），仅作参考 |
+| `core/test_consensus.py` | 保留 | Test 评估脚本 |
 | `requirements.txt` | 修改 | 移除错误的 `python==3.12.9`，保留运行时依赖 |
+
+**重要设计变更**：
+- 删除了 `LearnableConsensus`（~5 标量参数，用户质疑为"超参数微调"）
+- 新增 `NeuralConsensus`（MLP，~2.7K 参数，8-dim 特征输入，真正学习）
+- 修复广播 bug：`unsqueeze(1).unsqueeze(1)` → `unsqueeze(1).unsqueeze(-1)`
+- 移除 AMP（`torch.cuda.amp`），因 `linalg.eigh` 在 fp16 下不兼容且导致 NaN/Inf
 
 ---
 
