@@ -718,13 +718,14 @@ class MGCANet(nn.Module):
 
 def batch_symeig(X):
     # it is much faster to run symeig on CPU
+    device = X.device
     X = X.cpu()
     b, d, _ = X.size()
     bv = X.new(b, d, d)
     for batch_idx in range(X.shape[0]):
         e, v = torch.linalg.eigh(X[batch_idx, :, :].squeeze(), UPLO='L')
         bv[batch_idx, :, :] = v
-    # bv = bv.cuda()  # Removed for CPU compatibility
+    bv = bv.to(device)
     return bv
 
 def weighted_8points(x_in, logits):
