@@ -27,7 +27,7 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python main.py \
     --data_tr ${DATA_DIR}/yfcc-sift-2000-train.hdf5 \
     --data_va ${DATA_DIR}/yfcc-sift-2000-val.hdf5 \
     --data_te ${DATA_DIR}/yfcc-sift-2000-test.hdf5 \
-    --train_batch_size 16 \
+    --train_batch_size 8 \
     --train_iter 500000 \
     --train_lr 3e-4 \
     --val_intv 10000 \
