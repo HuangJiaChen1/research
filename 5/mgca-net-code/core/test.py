@@ -39,6 +39,8 @@ def test_sample(args):
 
 
 def dump_res(measure_list, res_path, eval_res, tag):
+    # Ensure output directory exists
+    os.makedirs(res_path, exist_ok=True)
     # dump test results
     for sub_tag in measure_list:
         # For median error
