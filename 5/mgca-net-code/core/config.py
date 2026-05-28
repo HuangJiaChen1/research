@@ -26,8 +26,8 @@ net_arg.add_argument(
     "--clusters", type=int, default=500, help=""
     "cluster number in OANet. Default: 500")
 net_arg.add_argument(
-    "--iter_num", type=int, default=1, help=""
-    "iteration number in the iterative network. Default: 1")
+    "--iter_num", type=int, default=2, help=""
+    "iteration number in the iterative network. Default: 2")
 net_arg.add_argument(
     "--net_channels", type=int, default=128, help=""
     "number of channels in a layer. Default: 128")

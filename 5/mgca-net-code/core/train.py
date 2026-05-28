@@ -66,7 +66,7 @@ def train(model, train_loader, valid_loader, config):
         best_acc = -1
         start_epoch = 0
         logger_train = Logger(os.path.join(config.log_path, 'log_train.txt'), title='oan')
-        logger_train.set_names(['Learning Rate'] + ['Geo Loss', 'Classfi Loss', 'L2 Loss']*(config.iter_num+3))
+        logger_train.set_names(['Learning Rate'] + ['Geo Loss', 'Classfi Loss', 'L2 Loss']*(config.iter_num+2))
         logger_valid = Logger(os.path.join(config.log_path, 'log_valid.txt'), title='oan')
         logger_valid.set_names(['Valid Acc'] + ['Geo Loss', 'Clasfi Loss', 'L2 Loss'])
     train_loader_iter = iter(train_loader)
