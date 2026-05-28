@@ -1,0 +1,32 @@
+[
+  {
+    "issue": "MoE Expert Capacity Severely Insufficient",
+    "details": "\nEach expert has only 4240 parameters (128->16->128)\n4 experts total: 16960 parameters\nBut needs to serve 48 sub-fields!\nEach expert theoretically handles 24.0 sub-field patterns\n\nComparison:\n- PointCN block: ~32000 parameters\n- Entire MoE layer all experts: 16960 parameters (only 53.0% of PointCN)\n",
+    "severity": 9,
+    "why_this_matters": "\nThe paper claims MoE provides \"specialized experts\" for different motion patterns,\nbut each expert's capacity is so small that it cannot learn complex motion-specific transforms.\nThis is more like a form of parameter sharing rather than true expert specialization.\n"
+  },
+  {
+    "issue": "Load Balance Loss Implementation May Have Problems",
+    "details": "\nLoad balance loss in code:\n    usage = weight.sum(dim=0) / (B * N)  # (E,)\n    lb_loss = (usage ** 2).sum() * self.E\n\nProblem analysis:\n1. Weight comes from softmax gate probability, but after top-k scatter it's not standard softmax distribution\n2. Formula (usage**2).sum()*E equals 1 when uniform, >E when non-uniform\n   - But this is only auxiliary loss with weight 0.01\n3. More serious problem: with top-k=2, each token only activates 2/4=50% of experts\n   - This means theoretically max load balance uniformity is only 50%\n   - Paper does not report expert utilization distribution\n",
+    "severity": 7,
+    "why_this_matters": "\nIf some experts are heavily used while others are idle,\nthen so-called \"specialized\" actually degenerates to a few experts doing all the work.\nBut paper does not analyze or report expert activation distribution.\n"
+  },
+  {
+    "issue": "Decomposition Is Not True Motion-Based Decomposition",
+    "details": "\nDecomposition flow in code:\n    sub_pattern = self.subpattern(x)  # diff_Pool: learnable soft assignment\n    out_moe, _ = self.feed_forward1(sub_pattern)\n    sub_pattern = out_moe + sub_pattern\n    sub_pattern = self.cluster(sub_pattern, x, mask)  # Attention-based\n\nProblems:\n1. diff_Pool does soft assignment based on feature similarity, not motion pattern\n2. No explicit use of geometric motion cues (translation/rotation/depth)\n3. Mask comes from previous layer's inlier probability (ReLU(tanh(logits))), which is inaccurate in early layers\n4. \"Probabilistic Prior-Guided\" sounds advanced, but mask is just 0/1 thresholded coarse filter\n\nTrue motion field decomposition should be based on:\n- Epipolar geometry consistency\n- Motion vector clustering\n- Depth layer segmentation\n- But code uses none of these explicitly\n",
+    "severity": 8,
+    "why_this_matters": "\nThe paper's core selling point is \"decomposing heterogeneous motion field into multiple sub-fields\",\nbut decomposition is based on learnable feature pooling + attention,\nrather than true motion-based decomposition.\nCompared to DeMatch's spectral decomposition, it lacks clear physical/geometric meaning.\n"
+  },
+  {
+    "issue": "Experimental Comparison May Be Unfair",
+    "details": "\nTraining configuration observed from train.py:\n- Training iterations: 80k steps (config.train_iter)\n- LR decay: step>=80000 lr *= 0.999996 (almost no decay)\n- loss_balance: 0.01 (fixed)\n- pattern_num: 48 (fixed)\n\nPotential issues:\n1. Did all methods use same training budget when compared?\n2. Some methods like DeMatch may use different training schedule\n3. GeoMoE has additional load_balance_loss auxiliary training, providing more gradient signal\n4. Is 48 sub-fields + 4 experts configuration ablated? Or grid searched optimal?\n\nFrom config.py:\n- num_experts_per_tok=2, num_experts=4\n- This means 50% of experts are idle at any given time\n- This design choice lacks theoretical justification\n",
+    "severity": 6,
+    "why_this_matters": "\nSOTA claim requires strict fair comparison.\nIf different methods have inconsistent training configurations,\nperformance gains may come from engineering rather than true algorithmic innovation.\n"
+  },
+  {
+    "issue": "Motion Field Assumption May Be Overly Simplified in Practice",
+    "details": "\nImplicit assumptions in paper and code:\n1. Input correspondences can be described by a motion field\n2. This motion field can be decomposed into piecewise smooth sub-fields\n3. Each sub-field corresponds to an independent motion pattern\n\nReal challenges:\n- Code uses (x1, x2, x2-x1) as motion representation\n- But x2-x1 is just 2D displacement, not true 3D motion field\n- Does not consider fundamental/essential matrix constraints\n- No explicit modeling of epipolar geometry\n\nDeeper problem:\nWhen outlier ratio > 90%:\n- Motion field is dominated by outliers\n- Any method based on motion coherence fails\n- But paper mainly tests on YFCC100M (~60-70% outlier)\n- Performance at extreme outlier ratios is unknown\n",
+    "severity": 8,
+    "why_this_matters": "\nIf core assumption (motion field decomposability) does not hold in practice,\nthen the theoretical foundation of the entire method is questioned.\nEspecially for non-rigid motion, dynamic scenes, low-texture regions.\n"
+  }
+]

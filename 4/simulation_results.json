@@ -1,0 +1,176 @@
+{
+  "decomposition": [
+    {
+      "n_patterns": 1,
+      "outlier_ratio": 0.5,
+      "motion_std": 2.967632259219544,
+      "motion_kurtosis": -0.36710472010435424,
+      "compactness": 12.623343944666306,
+      "n_inliers": 1000
+    },
+    {
+      "n_patterns": 1,
+      "outlier_ratio": 0.7,
+      "motion_std": 3.154162542278993,
+      "motion_kurtosis": -0.30483828562469073,
+      "compactness": 12.829998837929045,
+      "n_inliers": 600
+    },
+    {
+      "n_patterns": 1,
+      "outlier_ratio": 0.9,
+      "motion_std": 2.852912021803884,
+      "motion_kurtosis": -0.02766454888189651,
+      "compactness": 12.340970248961792,
+      "n_inliers": 199
+    },
+    {
+      "n_patterns": 1,
+      "outlier_ratio": 0.95,
+      "motion_std": 3.0245665271722886,
+      "motion_kurtosis": -0.2886694846561131,
+      "compactness": 12.655872338042881,
+      "n_inliers": 100
+    },
+    {
+      "n_patterns": 2,
+      "outlier_ratio": 0.5,
+      "motion_std": 6.351359251374526,
+      "motion_kurtosis": -1.0109955218097855,
+      "compactness": 12.90124768598554,
+      "n_inliers": 1000
+    },
+    {
+      "n_patterns": 2,
+      "outlier_ratio": 0.7,
+      "motion_std": 6.4069862171695,
+      "motion_kurtosis": -1.199623081430841,
+      "compactness": 12.258422030913842,
+      "n_inliers": 600
+    },
+    {
+      "n_patterns": 2,
+      "outlier_ratio": 0.9,
+      "motion_std": 6.285789083482885,
+      "motion_kurtosis": -1.1350871697649427,
+      "compactness": 11.494884805193367,
+      "n_inliers": 199
+    },
+    {
+      "n_patterns": 2,
+      "outlier_ratio": 0.95,
+      "motion_std": 6.538710304114734,
+      "motion_kurtosis": -1.2477946512113247,
+      "compactness": 10.357454536237789,
+      "n_inliers": 100
+    },
+    {
+      "n_patterns": 3,
+      "outlier_ratio": 0.5,
+      "motion_std": 6.306748440670401,
+      "motion_kurtosis": -0.7412123716977082,
+      "compactness": 11.542062485638036,
+      "n_inliers": 1000
+    },
+    {
+      "n_patterns": 3,
+      "outlier_ratio": 0.7,
+      "motion_std": 6.056584018212959,
+      "motion_kurtosis": -0.5404277481665143,
+      "compactness": 11.376232121913207,
+      "n_inliers": 600
+    },
+    {
+      "n_patterns": 3,
+      "outlier_ratio": 0.9,
+      "motion_std": 6.622665615433249,
+      "motion_kurtosis": -0.8012872759606458,
+      "compactness": 11.73616671758076,
+      "n_inliers": 199
+    },
+    {
+      "n_patterns": 3,
+      "outlier_ratio": 0.95,
+      "motion_std": 6.51718254964816,
+      "motion_kurtosis": -1.0117218371529533,
+      "compactness": 8.952249997392281,
+      "n_inliers": 100
+    },
+    {
+      "n_patterns": 5,
+      "outlier_ratio": 0.5,
+      "motion_std": 6.219138747948545,
+      "motion_kurtosis": -0.898577622046504,
+      "compactness": 10.483554241179533,
+      "n_inliers": 1000
+    },
+    {
+      "n_patterns": 5,
+      "outlier_ratio": 0.7,
+      "motion_std": 6.258729875037151,
+      "motion_kurtosis": -0.9980091981802994,
+      "compactness": 9.583386943275482,
+      "n_inliers": 600
+    },
+    {
+      "n_patterns": 5,
+      "outlier_ratio": 0.9,
+      "motion_std": 6.243346897306345,
+      "motion_kurtosis": -1.1472974431033043,
+      "compactness": 9.91646535036667,
+      "n_inliers": 199
+    },
+    {
+      "n_patterns": 5,
+      "outlier_ratio": 0.95,
+      "motion_std": 6.175230954737013,
+      "motion_kurtosis": -0.9670191521190965,
+      "compactness": 11.748271601005701,
+      "n_inliers": 100
+    }
+  ],
+  "moe_capacity": [
+    {
+      "capacity": 4,
+      "shared_network": 1.3862943611198906,
+      "moe_perfect_routing": 0.0,
+      "moe_realistic": 0.41588830833596724,
+      "moe_advantage": -0.9704060527839233
+    },
+    {
+      "capacity": 8,
+      "shared_network": 2.0794415416798357,
+      "moe_perfect_routing": 0.6931471805599453,
+      "moe_realistic": 1.1090354888959126,
+      "moe_advantage": -0.9704060527839231
+    },
+    {
+      "capacity": 16,
+      "shared_network": 2.772588722239781,
+      "moe_perfect_routing": 1.3862943611198906,
+      "moe_realistic": 1.8021826694558578,
+      "moe_advantage": -0.9704060527839233
+    },
+    {
+      "capacity": 32,
+      "shared_network": 3.4657359027997265,
+      "moe_perfect_routing": 2.0794415416798357,
+      "moe_realistic": 2.495329850015803,
+      "moe_advantage": -0.9704060527839236
+    },
+    {
+      "capacity": 64,
+      "shared_network": 4.1588830833596715,
+      "moe_perfect_routing": 2.772588722239781,
+      "moe_realistic": 3.1884770305757484,
+      "moe_advantage": -0.9704060527839231
+    },
+    {
+      "capacity": 128,
+      "shared_network": 4.852030263919617,
+      "moe_perfect_routing": 3.4657359027997265,
+      "moe_realistic": 3.881624211135694,
+      "moe_advantage": -0.9704060527839231
+    }
+  ]
+}

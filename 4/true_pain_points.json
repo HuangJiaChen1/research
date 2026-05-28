@@ -1,0 +1,58 @@
+[
+  {
+    "name": "Extreme Outlier Ratio Failure",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 10,
+    "description": "\nWhen outlier ratio > 90%, all motion field-based methods (including GeoMoE) fail.\nBecause motion field is dominated by outliers, any coherence-based assumption no longer holds.\nBut paper mainly tests on YFCC100M (~60-70% outlier), avoiding this real challenge.\n",
+    "evidence": "\n- YFCC100M average outlier ratio: ~60-70%\n- Real-world challenging scenarios: >90% outliers\n- Code uses ReLU(tanh(logits)) as mask, very coarse at high outlier ratios\n- No evaluation on datasets with >90% outliers\n"
+  },
+  {
+    "name": "Keypoint Localization Bottleneck",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 9,
+    "description": "\nAll learned outlier rejection methods assume correspondence locations are accurate.\nBut in reality, even with good descriptors (like SuperPoint), sub-pixel localization error\nwill break epipolar constraint, making perfect inlier classification unable to guarantee good pose estimation.\nOANet paper already found SuperPoint performs worse than SIFT in outdoor scenes.\n",
+    "evidence": "\n- OANet ICCV 2019: \"SuperPoint gives worse results in outdoor scenes than SIFT\"\n- Code computes loss based on virtual points (pts_virt), not actual keypoint accuracy\n- No explicit modeling of localization uncertainty\n"
+  },
+  {
+    "name": "Cross-Domain Generalization Gap",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 9,
+    "description": "\nGeoMoE trains and tests on YFCC100M and SUN3D, but these datasets have significant domain overlap.\nReal challenge is generalizing to completely different domains (e.g., day->night, summer->winter, aerial->ground).\nCorrMoE (2025) specifically studies this problem, but GeoMoE does not address this direction.\n",
+    "evidence": "\n- CorrMoE (arXiv 2507.11834) shows 75% improvement needed for cross-domain\n- GeoMoE paper only tests on YFCC100M/SUN3D with similar visual styles\n- No domain adaptation or style normalization in code\n"
+  },
+  {
+    "name": "Computational Inefficiency for Real-time Deployment",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 7,
+    "description": "\nAlthough GeoMoE is faster than NCMNet/MS2DG-Net, it still requires multiple attention propagations and MoE routing.\nFor real-time applications (e.g., SLAM, AR), <10ms latency is needed, but GeoMoE's 8-layer structure\nwith 48 sub-fields and 4 experts is still too heavy.\nMore importantly, paper does not do fair comparison with RANSAC family (USAC, MAGSAC++) on speed-accuracy trade-off.\n",
+    "evidence": "\n- Code uses full attention (O(N^2)) not linear attention\n- 8 layers x 2000 points = significant computation\n- No latency benchmark against RANSAC variants\n"
+  },
+  {
+    "name": "Training Data and Evaluation Bias",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 8,
+    "description": "\nAll methods train and evaluate on YFCC100M/SUN3D, but these datasets have selection bias:\n- YFCC100M filters image pairs with good overlap\n- SUN3D is mainly indoor scenes with good texture\n- Missing: low-texture scenes, non-rigid deformations, extreme illumination changes\n\nThis causes all methods to overfit to features of these specific distributions.\n",
+    "evidence": "\n- Standard benchmark protocol filters pairs with <10% inliers\n- Real-world deployment faces unconstrained scenarios\n- Methods show significant performance drop on cross-dataset evaluation\n"
+  },
+  {
+    "name": "Claimed 'Uniform Modeling' Problem is Overstated",
+    "claimed_in_paper": true,
+    "is_real": false,
+    "severity": 8,
+    "description": "\nGeoMoE claims \"uniform modeling\" in DeMatch and other methods is a major limitation,\nbut actually:\n1. DeMatch's decomposition is data-adaptive (through learnable basis)\n2. DeMatch++ (TPAMI 2025) already added local-context aggregation\n3. GeoMoE's MoE expert capacity is too small (128->16->128), so each expert learns very limited transforms\n4. Real bottleneck is not \"uniform vs specialized\", but outlier ratio and keypoint accuracy\n",
+    "evidence": "\n- DeMatch uses learnable basis vectors (data-adaptive, not uniform)\n- GeoMoE expert: 4,240 params vs DeMatch sub-field network: ~32K params\n- Expert hidden_dim=16 severely limits representation capacity\n- Performance gain may come from more parameters (8 layers + MoE) rather than true specialization\n"
+  },
+  {
+    "name": "Security Vulnerability to Adversarial Inputs",
+    "claimed_in_paper": false,
+    "is_real": true,
+    "severity": 7,
+    "description": "\nLearning-based methods are very vulnerable to non-overlapping or adversarially crafted image pairs.\nThey output many false matches, which could be used for poisoning attacks.\nIf deployed as online service, this is a serious security vulnerability.\nBut no paper (including GeoMoE) discusses this issue.\n",
+    "evidence": "\n- Research shows learned methods output many false matches on non-overlapping images\n- Code has no mechanism to detect or reject such cases\n- Standard benchmarks assume overlapping images\n"
+  }
+]
